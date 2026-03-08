@@ -1,0 +1,150 @@
+//// ----------------- Imagery formatting and index exploration ----------------- ////
+
+
+
+// Kharkiv, Ukraine
+Map.setCenter(36.25, 49.99, 11);
+
+// Cloud masking and scaling function for Landsat (C02, T1_L2)
+function masksr(image) {
+
+  var qa = image.select('QA_PIXEL');
+
+  var fill = qa.bitwiseAnd(1 << 0).eq(0); 
+  var dilatedCloud = qa.bitwiseAnd(1 << 1).eq(0);
+  var cirrus = qa.bitwiseAnd(1 << 2).eq(0);
+  var cloud = qa.bitwiseAnd(1 << 3).eq(0);
+  var cloudShadow = qa.bitwiseAnd(1 << 4).eq(0);
+  var snow = qa.bitwiseAnd(1 << 5).eq(0); // optional, to mask snow pixels
+
+  var mask = fill
+    .and(dilatedCloud)
+    .and(cirrus)
+    .and(cloud)
+    .and(cloudShadow)
+    .and(snow); // remove to keep snow pixels
+
+  var saturationMask = image.select('QA_RADSAT').eq(0);
+
+  var opticalBands = image.select('SR_B.')
+      .multiply(0.0000275)
+      .add(-0.2);
+
+  var thermalBands = image.select('ST_B.*')
+      .multiply(0.00341802)
+      .add(149.0);
+
+  return image
+      .addBands(opticalBands, null, true)
+      .addBands(thermalBands, null, true)
+      .updateMask(mask)
+      .updateMask(saturationMask);
+}
+
+// L7 SR masked + scaled
+var L7SR = ee.ImageCollection("LANDSAT/LE07/C02/T1_L2")
+  .filterDate('2000-01-01', '2000-12-31')
+  .map(masksr);
+
+// True Color median composite 
+Map.addLayer(L7SR.median(), {bands: ["SR_B3","SR_B2","SR_B1"], min:0, max: 0.15}, "L7 Med RGB", 0, 1);
+  
+// L7 indices function: adding NDBI, NDWI, and NDVI
+// NDBI = (SWIR - NIR) / (SWIR + NIR) // Built-up area index
+// NDWI = (GREEN - SWIR) / (GREEN + SWIR) // Modified NDWI (MNDWI)
+// NDVI = (NIR - RED) / (NIR + RED) // Vegetation index
+function indices(image) {
+  var ndbi = image.normalizedDifference(['SR_B5','SR_B4']).rename('NDBI');
+  var ndwi = image.normalizedDifference(['SR_B2','SR_B5']).rename('NDWI');
+  var ndvi = image.normalizedDifference(['SR_B4','SR_B3']).rename('NDVI');
+  
+  // add all indices to original image
+  return image.addBands(ndbi).addBands(ndwi).addBands(ndvi); 
+}
+
+var L7SR_indices = L7SR.map(indices); // map indices function over every image in collection
+
+print("L7SR_indices limit 2");
+print(L7SR_indices.limit(2));
+
+// Median composite, all bands
+var L7SR_indices_med = L7SR_indices.median();
+
+// Add unmasked continuous index layers to map (turned off by default)
+Map.addLayer(L7SR_indices_med, {bands: "NDBI", palette: ['black','yellow'], min:-0.4, max: 0.4}, "L7 NDBI Continuous", 0, 0.7);
+Map.addLayer(L7SR_indices_med, {bands: "NDWI", palette: ['black','blue'], min:-0.2, max: 0.5}, "L7 NDWI Continuous", 0, 0.7);
+Map.addLayer(L7SR_indices_med, {bands: "NDVI", palette: ['black','green'], min: 0.0, max: 0.8}, "L7 NDVI Continuous", 0, 0.7);
+
+// Create masks using conditional operators
+// Adjust these thresholds using the Inspector tool if needed for the specific terrain
+var L7SR_urban_mask = L7SR_indices_med.select("NDBI").gt(-0.1).and(L7SR_indices_med.select("NDBI").lt(0)).selfMask();
+var L7SR_water_mask = L7SR_indices_med.select("NDWI").gt(0.2).selfMask();
+var L7SR_veg_mask = L7SR_indices_med.select("NDVI").gt(0.3).selfMask();
+
+// Combine masks into a single image with multiple bands
+var L7SR_indices_mask = L7SR_urban_mask
+  .addBands(L7SR_water_mask)
+  .addBands(L7SR_veg_mask);
+
+print("L7SR Combined Masks");
+print(L7SR_indices_mask);
+  
+// Add the final categorized masks to the map
+Map.addLayer(L7SR_indices_mask, {bands: "NDWI", palette: 'blue'}, "L7 Water Mask", 1, 0.7);
+Map.addLayer(L7SR_indices_mask, {bands: "NDVI", palette: 'green'}, "L7 Vegetation Mask", 1, 0.7);
+Map.addLayer(L7SR_indices_mask, {bands: "NDBI", palette: 'yellow'}, "L7 Urban Mask", 1, 0.7);
+
+
+
+//// ----------------- Change Detection: 2013 vs 2024 ----------------- ////
+
+print("--- Running Change Detection (Landsat 8) ---");
+
+// Switch to Landsat 8 (LC08) for consistent comparison without Landsat 7 scan line errors
+var L8_Collection = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+  .filterBounds(Map.getCenter());
+
+// Filter for "Before 2014" (Using 2013, Landsat 8 data starts April 2013)
+var L8_2013 = L8_Collection
+  .filterDate('2013-04-01', '2013-12-31')
+  .map(masksr); // Re-using your existing cloud mask function
+  
+// Filter for "Latest" (Using 2024 for a complete recent year)
+var L8_2024 = L8_Collection
+  .filterDate('2024-01-01', '2024-12-31')
+  .map(masksr);
+
+// Landsat 8 Index Function
+// Note: L8 bands differ from L7. Green is B3, Red is B4, NIR is B5, SWIR1 is B6
+function addIndicesL8(image) {
+  var ndbi = image.normalizedDifference(['SR_B6','SR_B5']).rename('NDBI'); // SWIR1 - NIR
+  var ndwi = image.normalizedDifference(['SR_B3','SR_B6']).rename('NDWI'); // Green - SWIR1 (MNDWI)
+  var ndvi = image.normalizedDifference(['SR_B5','SR_B4']).rename('NDVI'); // NIR - Red
+  
+  return image.addBands(ndbi).addBands(ndwi).addBands(ndvi);
+}
+
+// Apply indices and generate median composites for both years
+var med_2013 = L8_2013.map(addIndicesL8).median();
+var med_2024 = L8_2024.map(addIndicesL8).median();
+
+// Calculate the difference: Latest (2024) - Baseline (2013)
+// Positive values = Increase ; Negative values = Decrease
+var index_difference = med_2024.subtract(med_2013);
+
+print("Index Difference Image (2024 - 2013)");
+print(index_difference);
+
+// Visualization parameters for the change maps
+// Palette mapping: [Decrease, No Change, Increase]
+var diff_vis_water = {bands: ['NDWI'], min: -0.3, max: 0.3, palette: ['red', 'white', 'blue']};
+var diff_vis_veg = {bands: ['NDVI'], min: -0.3, max: 0.3, palette: ['red', 'white', 'green']};
+var diff_vis_urban = {bands: ['NDBI'], min: -0.3, max: 0.3, palette: ['blue', 'white', 'red']}; 
+
+// Add Change Detection Layers to the Map
+// Water and Veg are turned off (false) by default so the map isn't too cluttered
+Map.addLayer(index_difference, diff_vis_water, "Change in Water (NDWI) 2013-2024", false);
+Map.addLayer(index_difference, diff_vis_veg, "Change in Veg (NDVI) 2013-2024", false);
+Map.addLayer(index_difference, diff_vis_urban, "Change in Urban (NDBI) 2013-2024", true);
+
+
