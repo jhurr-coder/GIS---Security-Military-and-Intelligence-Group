@@ -1,0 +1,313 @@
+//// ----------------- Setup ----------------- ////
+
+Map.setCenter(36.25, 49.99, 6);
+
+// Cloud masking for Landsat
+function masksr(image) {
+  var qa = image.select('QA_PIXEL');
+  var fill         = qa.bitwiseAnd(1 << 0).eq(0);
+  var dilatedCloud = qa.bitwiseAnd(1 << 1).eq(0);
+  var cirrus       = qa.bitwiseAnd(1 << 2).eq(0);
+  var cloud        = qa.bitwiseAnd(1 << 3).eq(0);
+  var cloudShadow  = qa.bitwiseAnd(1 << 4).eq(0);
+  var snow         = qa.bitwiseAnd(1 << 5).eq(0);
+  var mask = fill.and(dilatedCloud).and(cirrus).and(cloud).and(cloudShadow).and(snow);
+  var saturationMask = image.select('QA_RADSAT').eq(0);
+  var opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2);
+  var thermalBands = image.select('ST_B.*').multiply(0.00341802).add(149.0);
+  return image
+    .addBands(opticalBands, null, true)
+    .addBands(thermalBands, null, true)
+    .updateMask(mask)
+    .updateMask(saturationMask);
+}
+
+// Add NDVI and NDBI to Landsat 8
+function addIndicesL8(image) {
+  return image
+    .addBands(image.normalizedDifference(['SR_B5','SR_B4']).rename('NDVI'))
+    .addBands(image.normalizedDifference(['SR_B6','SR_B5']).rename('NDBI'));
+}
+
+
+//// ----------------- Study Regions ----------------- ////
+
+var regions = {
+  'Kharkiv':        ee.Geometry.Point([36.25, 49.99]).buffer(10000),
+  'Belgorod':       ee.Geometry.Point([36.58, 50.60]).buffer(10000),
+  'Luhansk':        ee.Geometry.Point([39.33, 48.57]).buffer(10000),
+  'Donetsk':        ee.Geometry.Point([37.80, 48.00]).buffer(10000),
+  'Mariupol':       ee.Geometry.Point([37.54, 47.10]).buffer(10000),
+  'Lviv':           ee.Geometry.Point([24.03, 49.84]).buffer(10000),
+  'St_Petersburg':  ee.Geometry.Point([30.32, 59.93]).buffer(10000)
+};
+
+// Study vs control labels for outlines
+var studyFC = ee.FeatureCollection([
+  ee.Feature(regions['Kharkiv'],   {label: 'Kharkiv'}),
+  ee.Feature(regions['Belgorod'],  {label: 'Belgorod'}),
+  ee.Feature(regions['Luhansk'],   {label: 'Luhansk'}),
+  ee.Feature(regions['Donetsk'],   {label: 'Donetsk'}),
+  ee.Feature(regions['Mariupol'],  {label: 'Mariupol'})
+]);
+
+var controlFC = ee.FeatureCollection([
+  ee.Feature(regions['Lviv'],          {label: 'Lviv'}),
+  ee.Feature(regions['St_Petersburg'], {label: 'St. Petersburg'})
+]);
+
+// Union for clipping
+var allUnion = regions['Kharkiv']
+  .union(regions['Belgorod']).union(regions['Luhansk'])
+  .union(regions['Donetsk']).union(regions['Mariupol'])
+  .union(regions['Lviv']).union(regions['St_Petersburg']);
+
+// Draw region outlines
+Map.addLayer(
+  ee.Image().byte().paint({featureCollection: studyFC,   color: 1, width: 2}),
+  {palette: ['red']}, "Study Region Outlines", true);
+Map.addLayer(
+  ee.Image().byte().paint({featureCollection: controlFC, color: 1, width: 2}),
+  {palette: ['blue']}, "Control Region Outlines", true);
+
+
+//// ----------------- Landsat 8: NDVI & NDBI 2013 and 2024 ----------------- ////
+
+var L8 = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+  .filterBounds(allUnion);
+
+// 2013 baseline (Landsat 8 starts April 2013)
+var L8_2013 = L8.filterDate('2013-04-01', '2013-12-31')
+  .map(masksr).map(addIndicesL8).median();
+
+// 2024 conflict period
+var L8_2024 = L8.filterDate('2024-01-01', '2024-12-31')
+  .map(masksr).map(addIndicesL8).median();
+
+// Visualization params
+var ndvi_vis  = {bands: 'NDVI', min: 0,    max: 0.8,  palette: ['white','lightgreen','darkgreen']};
+var ndbi_vis  = {bands: 'NDBI', min: -0.3, max: 0.3,  palette: ['blue','white','orange']};
+var ndvi_diff_vis = {bands: 'NDVI', min: -0.2, max: 0.2, palette: ['red','white','green']};
+var ndbi_diff_vis = {bands: 'NDBI', min: -0.15, max: 0.15, palette: ['blue','white','orange']};
+var rgb_vis   = {bands: ['SR_B4','SR_B3','SR_B2'], min: 0, max: 0.15};
+
+// Difference
+var L8_diff = L8_2024.subtract(L8_2013);
+
+// --- Per-region layers: loop over all 7 cities ---
+var regionNames = Object.keys(regions);
+
+regionNames.forEach(function(name) {
+  var geom = regions[name];
+
+  // RGB 2024
+  Map.addLayer(
+    L8_2024.clip(geom), rgb_vis,
+    name + ' | RGB 2024', false);
+
+  // NDVI 2013 pre-war
+  Map.addLayer(
+    L8_2013.clip(geom), ndvi_vis,
+    name + ' | NDVI 2013 (Pre-War)', false);
+
+  // NDVI 2024 post-war
+  Map.addLayer(
+    L8_2024.clip(geom), ndvi_vis,
+    name + ' | NDVI 2024 (Post-War)', false);
+
+  // NDVI difference
+  Map.addLayer(
+    L8_diff.clip(geom), ndvi_diff_vis,
+    name + ' | NDVI Change 2013→2024', false);
+
+  // NDBI 2013 pre-war
+  Map.addLayer(
+    L8_2013.clip(geom), ndbi_vis,
+    name + ' | NDBI 2013 (Pre-War)', false);
+
+  // NDBI 2024 post-war
+  Map.addLayer(
+    L8_2024.clip(geom), ndbi_vis,
+    name + ' | NDBI 2024 (Post-War)', false);
+
+  // NDBI difference
+  Map.addLayer(
+    L8_diff.clip(geom), ndbi_diff_vis,
+    name + ' | NDBI Change 2013→2024', false);
+});
+
+
+//// ----------------- Nighttime Lights: DMSP 2013 (pre-war) + VIIRS 2024 (post-war) ----------------- ////
+//
+// WHY DMSP FOR 2013:
+// VIIRS DNB monthly composites only begin January 2014.
+// Diagnostics confirmed: VIIRS 2012 count = 0, VIIRS 2013 count = 0, VIIRS 2014 count = 12.
+// DMSP-OLS is VIIRS's predecessor sensor, available in GEE natively through 2013.
+// DMSP band: stable_lights (DN 0-63)
+// VIIRS band: avg_rad (nW/cm²/sr, typical urban max ~100)
+// To make them comparable we normalize both to 0-1 before any subtraction.
+//
+var DMSP = ee.ImageCollection("NOAA/DMSP-OLS/NIGHTTIME_LIGHTS")
+  .select('stable_lights');
+
+var VIIRS_raw = ee.ImageCollection("NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG")
+  .select('avg_rad');
+
+// Pre-war: DMSP 2013 annual composite, normalized to 0-1
+var DMSP_2013_raw = DMSP.filterDate('2013-01-01','2013-12-31').mean();
+var DMSP_2013_norm = DMSP_2013_raw.divide(63).rename('ntl_norm');
+
+// Post-war: VIIRS 2024 annual mean, normalized to 0-1
+var VIIRS_2024_raw = VIIRS_raw.filterDate('2024-01-01','2024-12-31').mean();
+var VIIRS_2024_norm = VIIRS_2024_raw.divide(100).rename('ntl_norm');
+
+// Conflict period mean (2022-2024) for broader comparison
+var VIIRS_conflict_raw  = VIIRS_raw.filterDate('2022-03-01','2024-12-31').mean();
+var VIIRS_conflict_norm = VIIRS_conflict_raw.divide(100).rename('ntl_norm');
+
+// NTL change: normalized VIIRS 2024 minus normalized DMSP 2013
+var NTL_diff = VIIRS_2024_norm.subtract(DMSP_2013_norm).rename('ntl_diff');
+
+// Visualization params
+var ntl_raw_dmsp_vis  = {min: 0,    max: 63,  palette: ['black','yellow','white']};
+var ntl_raw_viirs_vis = {min: 0,    max: 10,  palette: ['black','yellow','white']}; // max:10 not 100 — post-conflict cities are dim
+var ntl_norm_vis      = {min: 0,    max: 1,   palette: ['black','yellow','white']};
+var ntl_diff_vis      = {min: -0.5, max: 0.2, palette: ['red','black','yellow']};
+
+// --- Per-region NTL layers ---
+regionNames.forEach(function(name) {
+  var geom = regions[name];
+
+  // DMSP 2013 raw — pre-war
+  Map.addLayer(
+    DMSP_2013_raw.clip(geom), ntl_raw_dmsp_vis,
+    name + ' | DMSP 2013 Raw — Pre-War Lights', false);
+
+  // DMSP 2013 normalized — pre-war
+  Map.addLayer(
+    DMSP_2013_norm.clip(geom), ntl_norm_vis,
+    name + ' | DMSP 2013 Normalized — Pre-War Lights', false);
+
+  // VIIRS 2024 raw — post-war
+  Map.addLayer(
+    VIIRS_2024_raw.clip(geom), ntl_raw_viirs_vis,
+    name + ' | VIIRS 2024 Raw — Post-War Lights', true);  // ON by default
+
+  // VIIRS 2024 normalized — post-war
+  Map.addLayer(
+    VIIRS_2024_norm.clip(geom), ntl_norm_vis,
+    name + ' | VIIRS 2024 Normalized — Post-War Lights', false);
+
+  // VIIRS 2022-2024 conflict mean (broader window)
+  Map.addLayer(
+    VIIRS_conflict_norm.clip(geom), ntl_norm_vis,
+    name + ' | VIIRS 2022-24 Conflict Mean — Normalized', false);
+
+  // NTL change: VIIRS 2024 vs DMSP 2013
+  Map.addLayer(
+    NTL_diff.clip(geom), ntl_diff_vis,
+    name + ' | NTL Change 2013→2024 (red=loss)', false);
+});
+
+
+//// ----------------- Time Series Charts: NTL 2013-2024 all regions ----------------- ////
+
+// Merge DMSP 2013 + VIIRS 2014-2024 into one continuous normalized series
+var DMSP_series = DMSP
+  .filterDate('2013-01-01','2014-01-01')
+  .map(function(img) {
+    return img.divide(63).rename('ntl_norm')
+              .copyProperties(img, ['system:time_start']);
+  });
+
+var VIIRS_series = VIIRS_raw
+  .filterDate('2014-01-01','2024-12-31')
+  .map(function(img) {
+    return img.divide(100).rename('ntl_norm')
+              .copyProperties(img, ['system:time_start']);
+  });
+
+var NTL_series = DMSP_series.merge(VIIRS_series);
+print("NTL series size (DMSP 2013 + VIIRS 2014-2024):", NTL_series.size());
+
+// Per-region NTL time series
+regionNames.forEach(function(name) {
+  print(ui.Chart.image.series({
+    imageCollection: NTL_series,
+    region:          regions[name],
+    reducer:         ee.Reducer.mean(),
+    scale:           500,
+    xProperty:       'system:time_start'
+  }).setOptions({
+    title:     name + ' — Normalized Nighttime Lights 2013–2024 (DMSP→VIIRS)',
+    vAxis:     {title: 'Normalized Radiance (0–1)'},
+    hAxis:     {title: 'Date'},
+    lineWidth: 2,
+    series:    {0: {color: name === 'Lviv' || name === 'St_Petersburg' ? 'blue' : 'red'}}
+  }));
+});
+
+// Combined all-regions chart
+var regionFC_all = ee.FeatureCollection(regionNames.map(function(name) {
+  return ee.Feature(regions[name], {label: name});
+}));
+
+print(ui.Chart.image.seriesByRegion({
+  imageCollection: NTL_series,
+  regions:         regionFC_all,
+  reducer:         ee.Reducer.mean(),
+  band:            'ntl_norm',
+  scale:           500,
+  xProperty:       'system:time_start',
+  seriesProperty:  'label'
+}).setOptions({
+  title:     'All Regions — Normalized Nighttime Lights 2013–2024',
+  vAxis:     {title: 'Normalized Radiance (0–1)'},
+  hAxis:     {title: 'Date'},
+  lineWidth: 2,
+  colors:    ['red','orange','gold','purple','brown','blue','gray']
+  // red→brown = study | blue/gray = control
+}));
+
+
+//// ----------------- DiD: NDVI, NDBI, NTL ----------------- ////
+
+var studyRegions = ee.FeatureCollection([
+  ee.Feature(regions['Kharkiv'],  {label: 'Kharkiv'}),
+  ee.Feature(regions['Belgorod'], {label: 'Belgorod'}),
+  ee.Feature(regions['Luhansk'],  {label: 'Luhansk'}),
+  ee.Feature(regions['Donetsk'],  {label: 'Donetsk'}),
+  ee.Feature(regions['Mariupol'], {label: 'Mariupol'})
+]);
+
+var controlRegions = ee.FeatureCollection([
+  ee.Feature(regions['Lviv'],          {label: 'Lviv'}),
+  ee.Feature(regions['St_Petersburg'], {label: 'St_Petersburg'})
+]);
+
+function didPrint(label, image, band, scale) {
+  var img = image.select(band);
+  var s = img.reduceRegions({collection: studyRegions,   reducer: ee.Reducer.mean(), scale: scale});
+  var c = img.reduceRegions({collection: controlRegions, reducer: ee.Reducer.mean(), scale: scale});
+  var sm = s.aggregate_mean('mean');
+  var cm = c.aggregate_mean('mean');
+  print("--- DiD: " + label + " ---");
+  print("Study Regions " + label + " Change (Mean):",   sm);
+  print("Control Regions " + label + " Change (Mean):", cm);
+  print("DiD Estimator (isolated conflict impact):", ee.Number(sm).subtract(cm));
+}
+
+// NDVI DiD (Landsat 8, 30m)
+didPrint("Vegetation (NDVI) 2013→2024", L8_diff, "NDVI", 30);
+
+// NDBI DiD (Landsat 8, 30m)
+didPrint("Urban Built-up (NDBI) 2013→2024", L8_diff, "NDBI", 30);
+
+// NTL DiD (DMSP→VIIRS normalized, 500m)
+didPrint("Nighttime Lights (DMSP 2013 vs VIIRS 2024)", NTL_diff, "ntl_diff", 500);
+
+print("--- Layer Guide ---");
+print("Each city has 7 layer types: RGB 2024 | NDVI 2013 | NDVI 2024 | NDVI Change | NDBI 2013 | NDBI 2024 | NDBI Change");
+print("Plus 6 NTL layers: DMSP 2013 Raw | DMSP 2013 Norm | VIIRS 2024 Raw | VIIRS 2024 Norm | VIIRS 2022-24 | NTL Change");
+print("Pre-war nighttime lights = DMSP 2013 (VIIRS unavailable before Jan 2014)");
+print("DMSP normalized /63 (max DN), VIIRS normalized /100 (typical urban max nW/cm2/sr)");
