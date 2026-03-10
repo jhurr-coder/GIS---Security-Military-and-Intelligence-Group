@@ -65,10 +65,10 @@ var allUnion = regions['Kharkiv']
 // Draw region outlines
 Map.addLayer(
   ee.Image().byte().paint({featureCollection: studyFC,   color: 1, width: 2}),
-  {palette: ['red']}, "Study Region Outlines", true);
+  {palette: ['black']}, "Study Region Outlines", true);
 Map.addLayer(
   ee.Image().byte().paint({featureCollection: controlFC, color: 1, width: 2}),
-  {palette: ['blue']}, "Control Region Outlines", true);
+  {palette: ['black']}, "Control Region Outlines", true);
 
 
 //// ----------------- Landsat 8: NDVI & NDBI 2013 and 2024 ----------------- ////
