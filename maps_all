@@ -28,7 +28,7 @@ function addIndicesL8(image) {
 }
 
 
-//// ----------------- Study Regions ----------------- ////
+//// ----------------- City Study Regions ----------------- ////
 
 var regions = {
   'Kharkiv':       ee.Geometry.Point([36.25, 49.99]).buffer(10000),
@@ -60,136 +60,139 @@ var allUnion = regions['Kharkiv']
 
 var regionNames = Object.keys(regions);
 
-// Region outlines
 Map.addLayer(
   ee.Image().byte().paint({featureCollection: studyRegions,   color:1, width:2}),
-  {palette:['red']},  "Study Regions (red)",    true);
+  {palette:['red']},  "City Study Regions (red)",    true);
 Map.addLayer(
   ee.Image().byte().paint({featureCollection: controlRegions, color:1, width:2}),
-  {palette:['blue']}, "Control Regions (blue)", true);
+  {palette:['blue']}, "City Control Regions (blue)", true);
 
 
-//// ----------------- NIGHTTIME LIGHTS ----------------- ////
+//// ----------------- Agricultural Regions (Literature-Aligned) ----------------- ////
 //
-// FULL TIMELINE:
-//   2013: VIIRS Annual V2.1 average_masked — only option, monthly starts Jan 2014
-//   2014-2025: VIIRS Monthly V1 avg_rad
-//
-// KEY COMPARISON PERIODS:
-//   [W1] Donbas War:     2013 → 2014, 2013 → 2015
-//   [INT] Interim:       2015 → 2021 (recovery/stagnation between wars)
-//   [W2] Full Invasion:  2021 → 2022, 2021 → 2023, 2021 → 2024, 2021 → 2025
-//   [CUM] Cumulative:    2013 → 2025
-//
-// TIME SERIES: 1 annual point (2013) + full monthly (2014-2025)
-// Feb 2022 collapse visible month-by-month
+// Source: Ghorbanian et al. (2023) doi:10.1016/j.jag.2023.103862
+//         Kussul et al. (2024) — Kherson/Donetsk >20% cultivated area decline
+// Treatment: highest damaged-field density oblasts per paper Fig.8
+// Control: Vinnytsia/Khmelnytskyi — outside study area in paper, same chernozem soils
+// Buffers: 30km — captures diffuse cropland patches at oblast scale
 //
 
-var VIIRS_annual  = ee.ImageCollection("NOAA/VIIRS/DNB/ANNUAL_V21")
-  .select('average_masked');
+var agri_regions = {
+  'Donetsk_Steppe':      ee.Geometry.Point([37.80, 47.80]).buffer(30000),
+  'Luhansk_Rural':       ee.Geometry.Point([39.10, 48.50]).buffer(30000),
+  'Zaporizhzhia_Steppe': ee.Geometry.Point([35.50, 47.20]).buffer(30000),
+  'Kherson_North':       ee.Geometry.Point([32.61, 46.65]).buffer(30000),
+  'Mykolaiv_East':       ee.Geometry.Point([31.80, 47.20]).buffer(30000),
+  'Vinnytsia_Agri':      ee.Geometry.Point([28.47, 49.23]).buffer(30000),
+  'Khmelnytskyi_Agri':   ee.Geometry.Point([26.99, 49.42]).buffer(30000)
+};
+
+var agriStudyRegions = ee.FeatureCollection([
+  ee.Feature(agri_regions['Donetsk_Steppe'],      {label: 'Donetsk_Steppe'}),
+  ee.Feature(agri_regions['Luhansk_Rural'],        {label: 'Luhansk_Rural'}),
+  ee.Feature(agri_regions['Zaporizhzhia_Steppe'],  {label: 'Zaporizhzhia_Steppe'}),
+  ee.Feature(agri_regions['Kherson_North'],        {label: 'Kherson_North'}),
+  ee.Feature(agri_regions['Mykolaiv_East'],        {label: 'Mykolaiv_East'})
+]);
+
+var agriControlRegions = ee.FeatureCollection([
+  ee.Feature(agri_regions['Vinnytsia_Agri'],    {label: 'Vinnytsia_Agri'}),
+  ee.Feature(agri_regions['Khmelnytskyi_Agri'], {label: 'Khmelnytskyi_Agri'})
+]);
+
+var agriUnion = agri_regions['Donetsk_Steppe']
+  .union(agri_regions['Luhansk_Rural'])
+  .union(agri_regions['Zaporizhzhia_Steppe'])
+  .union(agri_regions['Kherson_North'])
+  .union(agri_regions['Mykolaiv_East'])
+  .union(agri_regions['Vinnytsia_Agri'])
+  .union(agri_regions['Khmelnytskyi_Agri']);
+
+var agriRegionNames = Object.keys(agri_regions);
+
+Map.addLayer(
+  ee.Image().byte().paint({featureCollection: agriStudyRegions,   color:1, width:2}),
+  {palette:['orange']}, "Agri Study Regions (orange)", true);
+Map.addLayer(
+  ee.Image().byte().paint({featureCollection: agriControlRegions, color:1, width:2}),
+  {palette:['cyan']},   "Agri Control Regions (cyan)",  true);
+
+
+//// ----------------- Nighttime Lights ----------------- ////
+//
+// Visualization rationale:
+//   ntl_vis: max:60 used consistently for ALL snapshot years
+//     — same scale allows direct visual comparison; dimming shows up as darker yellow
+//     — using a lower max for post-invasion years would artificially brighten them
+//   ntl_diff: symmetric ±20
+//     — black = no change (correct neutral); avoids pushing near-zero to yellow
+//     — ±20 captures full range including near-total blackout (Mariupol)
+//
 
 var VIIRS_monthly = ee.ImageCollection("NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG")
   .select('avg_rad');
 
 // Diagnostics
-print("=== NTL Diagnostics ===");
-print("VIIRS Annual V2.1 size (should be 9):", VIIRS_annual.size());
+print("VIIRS Monthly total size:", VIIRS_monthly.size());
 print("VIIRS Monthly latest date:",
   ee.Date(VIIRS_monthly.sort('system:time_start', false).first().get('system:time_start')));
+print("VIIRS Monthly 2021 count:", VIIRS_monthly.filterDate('2021-01-01','2021-12-31').size());
+print("VIIRS Monthly 2022 count:", VIIRS_monthly.filterDate('2022-01-01','2022-12-31').size());
+print("VIIRS Monthly 2023 count:", VIIRS_monthly.filterDate('2023-01-01','2023-12-31').size());
+print("VIIRS Monthly 2024 count:", VIIRS_monthly.filterDate('2024-01-01','2024-12-31').size());
 print("VIIRS Monthly 2025 count:", VIIRS_monthly.filterDate('2025-01-01','2025-12-31').size());
+print("VIIRS Monthly 2026 count:", VIIRS_monthly.filterDate('2026-01-01','2026-12-31').size());
 
-// --- NTL Snapshots ---
-// 2013: Annual V2.1 only
-var NTL_2013 = VIIRS_annual
-  .filterDate('2013-01-01','2013-12-31').mean().rename('ntl');
-
-// 2014-2025: monthly annual means
-var NTL_2014   = VIIRS_monthly.filterDate('2014-01-01','2014-12-31').mean().rename('ntl');
-var NTL_2015   = VIIRS_monthly.filterDate('2015-01-01','2015-12-31').mean().rename('ntl');
+// --- Snapshot images ---
 var NTL_2021   = VIIRS_monthly.filterDate('2021-01-01','2021-12-31').mean().rename('ntl');
 var NTL_2022   = VIIRS_monthly.filterDate('2022-01-01','2022-12-31').mean().rename('ntl');
 var NTL_2023   = VIIRS_monthly.filterDate('2023-01-01','2023-12-31').mean().rename('ntl');
 var NTL_2024   = VIIRS_monthly.filterDate('2024-01-01','2024-12-31').mean().rename('ntl');
+var NTL_2025   = VIIRS_monthly.filterDate('2025-01-01','2025-12-31').mean().rename('ntl');
 var NTL_latest = VIIRS_monthly.filterDate('2025-01-01','2026-03-01').mean().rename('ntl');
 
-// --- NTL Differences ---
-// Wave 1: Donbas War
-var NTL_diff_2013_2014 = NTL_2014.subtract(NTL_2013).rename('ntl_diff');
-var NTL_diff_2013_2015 = NTL_2015.subtract(NTL_2013).rename('ntl_diff');
-// Interim: between wars
-var NTL_diff_2015_2021 = NTL_2021.subtract(NTL_2015).rename('ntl_diff');
-// Wave 2: Full Invasion
-var NTL_diff_2021_2022 = NTL_2022.subtract(NTL_2021).rename('ntl_diff');
-var NTL_diff_2021_2023 = NTL_2023.subtract(NTL_2021).rename('ntl_diff');
-var NTL_diff_2021_2024 = NTL_2024.subtract(NTL_2021).rename('ntl_diff');
-var NTL_diff_2021_2025 = NTL_latest.subtract(NTL_2021).rename('ntl_diff');
-// Cumulative
-var NTL_diff_2013_2025 = NTL_latest.subtract(NTL_2013).rename('ntl_diff');
+// --- Difference images (all vs 2021 baseline) ---
+var NTL_2022_diff   = NTL_2022.subtract(NTL_2021).rename('ntl_diff');
+var NTL_2023_diff   = NTL_2023.subtract(NTL_2021).rename('ntl_diff');
+var NTL_2024_diff   = NTL_2024.subtract(NTL_2021).rename('ntl_diff');
+var NTL_2025_diff   = NTL_2025.subtract(NTL_2021).rename('ntl_diff');
+var NTL_latest_diff = NTL_latest.subtract(NTL_2021).rename('ntl_diff');
 
-// Visualization params
-var ntl_vis_bright = {min:0,   max:60,  palette:['black','yellow','white']};
-var ntl_vis_dim    = {min:0,   max:30,  palette:['black','yellow','white']};
-var ntl_diff_vis   = {min:-20, max:5,   palette:['red','black','yellow']};
-var ntl_diff_pos   = {min:-5,  max:20,  palette:['red','black','yellow']}; // for interim (may be positive)
+// --- Vis params ---
+// FIXED: consistent max:60 for all snapshots — lower max artificially brightens dim areas
+// FIXED: symmetric ±20 for diff — black=no change, avoids false yellow in undamaged areas
+var ntl_vis      = {min:0,   max:60,  palette:['black','yellow','white']};
+var ntl_diff_vis = {min:-20, max:20,  palette:['red','black','yellow']};
 
+// --- Per-city NTL map layers ---
 regionNames.forEach(function(name) {
   var geom = regions[name];
 
-  // Snapshots
-  Map.addLayer(NTL_2013.clip(geom),   ntl_vis_bright, name + ' | [NTL] 2013 — Pre-Donbas',        false);
-  Map.addLayer(NTL_2014.clip(geom),   ntl_vis_bright, name + ' | [NTL] 2014 — Donbas Year 1',     false);
-  Map.addLayer(NTL_2015.clip(geom),   ntl_vis_bright, name + ' | [NTL] 2015 — Donbas Year 2',     false);
-  Map.addLayer(NTL_2021.clip(geom),   ntl_vis_bright, name + ' | [NTL] 2021 — Pre-Invasion',      false);
-  Map.addLayer(NTL_2022.clip(geom),   ntl_vis_dim,    name + ' | [NTL] 2022 — Invasion Year 1',   false);
-  Map.addLayer(NTL_2023.clip(geom),   ntl_vis_dim,    name + ' | [NTL] 2023 — Invasion Year 2',   false);
-  Map.addLayer(NTL_2024.clip(geom),   ntl_vis_dim,    name + ' | [NTL] 2024 — Invasion Year 3',   false);
-  Map.addLayer(NTL_latest.clip(geom), ntl_vis_dim,    name + ' | [NTL] 2025 Latest',               true); // ON
+  Map.addLayer(NTL_2021.clip(geom),   ntl_vis,      name + ' | [NTL] 2021 — Pre-Invasion Baseline', false);
+  Map.addLayer(NTL_2022.clip(geom),   ntl_vis,      name + ' | [NTL] 2022 — Year 1 Invasion', false);
+  Map.addLayer(NTL_2023.clip(geom),   ntl_vis,      name + ' | [NTL] 2023 — Year 2 Invasion', false);
+  Map.addLayer(NTL_2024.clip(geom),   ntl_vis,      name + ' | [NTL] 2024 — Year 3 Invasion', false);
+  Map.addLayer(NTL_2025.clip(geom),   ntl_vis,      name + ' | [NTL] 2025 — Year 4 Invasion', false);
+  Map.addLayer(NTL_latest.clip(geom), ntl_vis,      name + ' | [NTL] Latest 2025/2026 — Current', true);
 
-  // Wave 1 differences
-  Map.addLayer(NTL_diff_2013_2014.clip(geom), ntl_diff_vis,
-    name + ' | [W1-NTL] Change 2013→2014 (red=loss)', false);
-  Map.addLayer(NTL_diff_2013_2015.clip(geom), ntl_diff_vis,
-    name + ' | [W1-NTL] Change 2013→2015 (red=loss)', false);
-
-  // Interim difference
-  Map.addLayer(NTL_diff_2015_2021.clip(geom), ntl_diff_pos,
-    name + ' | [INT-NTL] Change 2015→2021 Recovery', false);
-
-  // Wave 2 differences
-  Map.addLayer(NTL_diff_2021_2022.clip(geom), ntl_diff_vis,
-    name + ' | [W2-NTL] Change 2021→2022 (red=loss)', false);
-  Map.addLayer(NTL_diff_2021_2023.clip(geom), ntl_diff_vis,
-    name + ' | [W2-NTL] Change 2021→2023 (red=loss)', false);
-  Map.addLayer(NTL_diff_2021_2024.clip(geom), ntl_diff_vis,
-    name + ' | [W2-NTL] Change 2021→2024 (red=loss)', false);
-  Map.addLayer(NTL_diff_2021_2025.clip(geom), ntl_diff_vis,
-    name + ' | [W2-NTL] Change 2021→2025 (red=loss)', false);
-
-  // Cumulative
-  Map.addLayer(NTL_diff_2013_2025.clip(geom), ntl_diff_vis,
-    name + ' | [CUM-NTL] Change 2013→2025 (red=loss)', false);
+  Map.addLayer(NTL_2022_diff.clip(geom),   ntl_diff_vis, name + ' | [NTL] Change 2021→2022 (red=loss)', false);
+  Map.addLayer(NTL_2023_diff.clip(geom),   ntl_diff_vis, name + ' | [NTL] Change 2021→2023 (red=loss)', false);
+  Map.addLayer(NTL_2024_diff.clip(geom),   ntl_diff_vis, name + ' | [NTL] Change 2021→2024 (red=loss)', false);
+  Map.addLayer(NTL_2025_diff.clip(geom),   ntl_diff_vis, name + ' | [NTL] Change 2021→2025 (red=loss)', false);
+  Map.addLayer(NTL_latest_diff.clip(geom), ntl_diff_vis, name + ' | [NTL] Change 2021→Latest (red=loss)', false);
 });
 
 
-//// ----------------- NTL TIME SERIES: 1 Annual (2013) + Full Monthly (2014-2025) ----------------- ////
+//// ----------------- NTL Time Series: Monthly 2021 → Latest ----------------- ////
 
-var annual_2013_point = VIIRS_annual
-  .filterDate('2013-01-01','2013-12-31')
-  .mean()
-  .rename('ntl')
-  .set('system:time_start', ee.Date('2013-07-01').millis());
-
-var monthly_series = VIIRS_monthly
-  .filterDate('2014-01-01','2026-03-01')
+var NTL_series = VIIRS_monthly
+  .filterDate('2021-01-01','2026-03-01')
   .map(function(img) {
-    return img.rename('ntl')
-              .copyProperties(img, ['system:time_start']);
+    return img.rename('ntl').copyProperties(img, ['system:time_start']);
   });
 
-var NTL_series = ee.ImageCollection([annual_2013_point]).merge(monthly_series);
-print("NTL series size (1 annual 2013 + monthly 2014-2025):", NTL_series.size());
+print("NTL monthly series size (2021–latest):", NTL_series.size());
 
-// Per-region charts
 regionNames.forEach(function(name) {
   print(ui.Chart.image.series({
     imageCollection: NTL_series,
@@ -198,7 +201,7 @@ regionNames.forEach(function(name) {
     scale:           500,
     xProperty:       'system:time_start'
   }).setOptions({
-    title:     name + ' — VIIRS Nighttime Lights 2013–2025 (nW/cm²/sr)',
+    title:     name + ' — VIIRS Nighttime Lights 2021–2025 (nW/cm²/sr)',
     vAxis:     {title: 'Avg Radiance (nW/cm²/sr)'},
     hAxis:     {title: 'Date'},
     lineWidth: 2,
@@ -207,7 +210,6 @@ regionNames.forEach(function(name) {
   }));
 });
 
-// Combined chart
 var regionFC_all = ee.FeatureCollection(regionNames.map(function(name) {
   return ee.Feature(regions[name], {label: name});
 }));
@@ -221,7 +223,7 @@ print(ui.Chart.image.seriesByRegion({
   xProperty:       'system:time_start',
   seriesProperty:  'label'
 }).setOptions({
-  title:     'All Regions — VIIRS Nighttime Lights 2013–2025 | Donbas + Full Invasion',
+  title:     'All City Regions — VIIRS NTL 2021–2025 | Pre vs Post Feb 2022 Invasion',
   vAxis:     {title: 'Avg Radiance (nW/cm²/sr)'},
   hAxis:     {title: 'Date'},
   lineWidth: 2,
@@ -230,148 +232,155 @@ print(ui.Chart.image.seriesByRegion({
 }));
 
 
-//// ----------------- LANDSAT 8+9: NDVI & NDBI 2013-2025 ----------------- ////
+//// ----------------- City Landsat 8: NDVI & NDBI 2021–2025 ----------------- ////
 //
-// 2013-2021: Landsat 8 only (L9 launched Sep 2021)
-// 2022-2025: Landsat 8 + 9 merged (identical bands, maximum coverage)
-// L8 latest: Feb 2026 | L9 latest: Mar 2026
-//
-// KEY YEARS: 2013, 2014, 2015, 2021, 2022, 2023, 2024, 2025
-//
-// COMPARISON PERIODS:
-//   [W1]  Donbas War:    2013→2014, 2013→2015
-//   [INT] Interim:       2015→2021
-//   [W2]  Full Invasion: 2021→2022, 2021→2023, 2021→2024, 2021→2025
-//   [CUM] Cumulative:    2013→2025
+// Vis param rationale:
+//   ndvi_vis:      min:0.1 — removes water/cloud artifact negatives in urban buffers
+//                  max:0.8 — covers full urban vegetation range
+//   ndvi_diff_vis: ±0.20 — wider than original ±0.15; captures destroyed city blocks
+//                           which can exceed 0.15 NDVI loss
+//   ndbi_vis:      ±0.3  — symmetric, standard for urban/rural gradient
+//   ndbi_diff_vis: ±0.15 — widened from ±0.10; rubble/destruction events push past 0.10
 //
 
-var L8 = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2").filterBounds(allUnion);
-var L9 = ee.ImageCollection("LANDSAT/LC09/C02/T1_L2").filterBounds(allUnion);
-var L89 = L8.merge(L9);
+var L8 = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+  .filterBounds(allUnion);
 
-print("=== Landsat Diagnostics ===");
-print("L8+L9 2013 count:", L89.filterDate('2013-04-01','2013-12-31').size());
-print("L8+L9 2014 count:", L89.filterDate('2014-01-01','2014-12-31').size());
-print("L8+L9 2015 count:", L89.filterDate('2015-01-01','2015-12-31').size());
-print("L8+L9 2021 count:", L89.filterDate('2021-01-01','2021-12-31').size());
-print("L8+L9 2025 count:", L89.filterDate('2025-01-01','2025-12-31').size());
+print("Landsat 8 city 2025 count:", L8.filterDate('2025-01-01','2025-12-31').size());
 
-// Annual median composites
-// 2013: Apr-Dec only (L8 launched Apr 2013)
-var L89_2013 = L8.filterDate('2013-04-01','2013-12-31').map(masksr).map(addIndicesL8).median();
-var L89_2014 = L8.filterDate('2014-01-01','2014-12-31').map(masksr).map(addIndicesL8).median();
-var L89_2015 = L8.filterDate('2015-01-01','2015-12-31').map(masksr).map(addIndicesL8).median();
-var L89_2021 = L89.filterDate('2021-01-01','2021-12-31').map(masksr).map(addIndicesL8).median();
-var L89_2022 = L89.filterDate('2022-01-01','2022-12-31').map(masksr).map(addIndicesL8).median();
-var L89_2023 = L89.filterDate('2023-01-01','2023-12-31').map(masksr).map(addIndicesL8).median();
-var L89_2024 = L89.filterDate('2024-01-01','2024-12-31').map(masksr).map(addIndicesL8).median();
-// 2025: all available through Mar 2026
-var L89_2025 = L89.filterDate('2025-01-01','2026-03-31').map(masksr).map(addIndicesL8).median();
+var L8_2021 = L8.filterDate('2021-01-01','2021-12-31').map(masksr).map(addIndicesL8).median();
+var L8_2022 = L8.filterDate('2022-01-01','2022-12-31').map(masksr).map(addIndicesL8).median();
+var L8_2023 = L8.filterDate('2023-01-01','2023-12-31').map(masksr).map(addIndicesL8).median();
+var L8_2024 = L8.filterDate('2024-01-01','2024-12-31').map(masksr).map(addIndicesL8).median();
+var L8_2025 = L8.filterDate('2025-01-01','2025-12-31').map(masksr).map(addIndicesL8).median();
 
-// --- Differences ---
-// Wave 1: Donbas War
-var L89_diff_2013_2014 = L89_2014.subtract(L89_2013);
-var L89_diff_2013_2015 = L89_2015.subtract(L89_2013);
-// Interim: between wars
-var L89_diff_2015_2021 = L89_2021.subtract(L89_2015);
-// Wave 2: Full Invasion
-var L89_diff_2021_2022 = L89_2022.subtract(L89_2021);
-var L89_diff_2021_2023 = L89_2023.subtract(L89_2021);
-var L89_diff_2021_2024 = L89_2024.subtract(L89_2021);
-var L89_diff_2021_2025 = L89_2025.subtract(L89_2021);
-// Cumulative
-var L89_diff_2013_2025 = L89_2025.subtract(L89_2013);
+var L8_2022_diff = L8_2022.subtract(L8_2021);
+var L8_2023_diff = L8_2023.subtract(L8_2021);
+var L8_2024_diff = L8_2024.subtract(L8_2021);
+var L8_2025_diff = L8_2025.subtract(L8_2021);
 
-// Visualization params
 var rgb_vis       = {bands:['SR_B4','SR_B3','SR_B2'], min:0,     max:0.15};
-var ndvi_vis      = {bands:'NDVI', min:0,     max:0.8,  palette:['white','lightgreen','darkgreen']};
+var ndvi_vis      = {bands:'NDVI', min:0.1,   max:0.8,  palette:['white','lightgreen','darkgreen']};
 var ndbi_vis      = {bands:'NDBI', min:-0.3,  max:0.3,  palette:['blue','white','orange']};
-var ndvi_diff_vis = {bands:'NDVI', min:-0.15, max:0.15, palette:['red','white','green']};
-var ndbi_diff_vis = {bands:'NDBI', min:-0.1,  max:0.1,  palette:['blue','white','orange']};
-// Interim diff — may show recovery (positive NDVI)
-var ndvi_int_vis  = {bands:'NDVI', min:-0.1,  max:0.2,  palette:['red','white','green']};
-var ndbi_int_vis  = {bands:'NDBI', min:-0.15, max:0.1,  palette:['blue','white','orange']};
+var ndvi_diff_vis = {bands:'NDVI', min:-0.20, max:0.20, palette:['red','white','green']};
+var ndbi_diff_vis = {bands:'NDBI', min:-0.15, max:0.15, palette:['blue','white','orange']};
 
 regionNames.forEach(function(name) {
   var geom = regions[name];
 
-  // --- RGB reference snapshots ---
-  Map.addLayer(L89_2013.clip(geom), rgb_vis, name + ' | RGB 2013 — Pre-Donbas',   false);
-  Map.addLayer(L89_2014.clip(geom), rgb_vis, name + ' | RGB 2014 — Donbas Year 1',false);
-  Map.addLayer(L89_2015.clip(geom), rgb_vis, name + ' | RGB 2015 — Donbas Year 2',false);
-  Map.addLayer(L89_2021.clip(geom), rgb_vis, name + ' | RGB 2021 — Pre-Invasion', false);
-  Map.addLayer(L89_2022.clip(geom), rgb_vis, name + ' | RGB 2022 — Invasion Yr 1',false);
-  Map.addLayer(L89_2023.clip(geom), rgb_vis, name + ' | RGB 2023 — Invasion Yr 2',false);
-  Map.addLayer(L89_2024.clip(geom), rgb_vis, name + ' | RGB 2024 — Invasion Yr 3',false);
-  Map.addLayer(L89_2025.clip(geom), rgb_vis, name + ' | RGB 2025 — Invasion Yr 4',false);
+  Map.addLayer(L8_2021.clip(geom), rgb_vis, name + ' | RGB 2021 — Pre-Invasion', false);
+  Map.addLayer(L8_2022.clip(geom), rgb_vis, name + ' | RGB 2022 — Year 1', false);
+  Map.addLayer(L8_2023.clip(geom), rgb_vis, name + ' | RGB 2023 — Year 2', false);
+  Map.addLayer(L8_2024.clip(geom), rgb_vis, name + ' | RGB 2024 — Year 3', false);
+  Map.addLayer(L8_2025.clip(geom), rgb_vis, name + ' | RGB 2025 — Year 4', false);
 
-  // --- NDVI snapshots ---
-  Map.addLayer(L89_2013.clip(geom), ndvi_vis, name + ' | NDVI 2013 — Pre-Donbas',   false);
-  Map.addLayer(L89_2014.clip(geom), ndvi_vis, name + ' | NDVI 2014 — Donbas Year 1',false);
-  Map.addLayer(L89_2015.clip(geom), ndvi_vis, name + ' | NDVI 2015 — Donbas Year 2',false);
-  Map.addLayer(L89_2021.clip(geom), ndvi_vis, name + ' | NDVI 2021 — Pre-Invasion', false);
-  Map.addLayer(L89_2022.clip(geom), ndvi_vis, name + ' | NDVI 2022 — Invasion Yr 1',false);
-  Map.addLayer(L89_2023.clip(geom), ndvi_vis, name + ' | NDVI 2023 — Invasion Yr 2',false);
-  Map.addLayer(L89_2024.clip(geom), ndvi_vis, name + ' | NDVI 2024 — Invasion Yr 3',false);
-  Map.addLayer(L89_2025.clip(geom), ndvi_vis, name + ' | NDVI 2025 — Invasion Yr 4',false);
+  Map.addLayer(L8_2021.clip(geom), ndvi_vis, name + ' | NDVI 2021 — Pre-Invasion Baseline', false);
+  Map.addLayer(L8_2022.clip(geom), ndvi_vis, name + ' | NDVI 2022 — Year 1 Invasion', false);
+  Map.addLayer(L8_2023.clip(geom), ndvi_vis, name + ' | NDVI 2023 — Year 2 Invasion', false);
+  Map.addLayer(L8_2024.clip(geom), ndvi_vis, name + ' | NDVI 2024 — Year 3 Invasion', false);
+  Map.addLayer(L8_2025.clip(geom), ndvi_vis, name + ' | NDVI 2025 — Year 4 Invasion', false);
 
-  // --- NDVI differences ---
-  // Wave 1
-  Map.addLayer(L89_diff_2013_2014.clip(geom), ndvi_diff_vis,
-    name + ' | [W1] NDVI Change 2013→2014', false);
-  Map.addLayer(L89_diff_2013_2015.clip(geom), ndvi_diff_vis,
-    name + ' | [W1] NDVI Change 2013→2015', false);
-  // Interim
-  Map.addLayer(L89_diff_2015_2021.clip(geom), ndvi_int_vis,
-    name + ' | [INT] NDVI Change 2015→2021 Recovery', false);
-  // Wave 2
-  Map.addLayer(L89_diff_2021_2022.clip(geom), ndvi_diff_vis,
-    name + ' | [W2] NDVI Change 2021→2022', false);
-  Map.addLayer(L89_diff_2021_2023.clip(geom), ndvi_diff_vis,
-    name + ' | [W2] NDVI Change 2021→2023', false);
-  Map.addLayer(L89_diff_2021_2024.clip(geom), ndvi_diff_vis,
-    name + ' | [W2] NDVI Change 2021→2024', false);
-  Map.addLayer(L89_diff_2021_2025.clip(geom), ndvi_diff_vis,
-    name + ' | [W2] NDVI Change 2021→2025', false);
-  // Cumulative
-  Map.addLayer(L89_diff_2013_2025.clip(geom), ndvi_diff_vis,
-    name + ' | [CUM] NDVI Change 2013→2025', false);
+  Map.addLayer(L8_2022_diff.clip(geom), ndvi_diff_vis, name + ' | NDVI Change 2021→2022', false);
+  Map.addLayer(L8_2023_diff.clip(geom), ndvi_diff_vis, name + ' | NDVI Change 2021→2023', false);
+  Map.addLayer(L8_2024_diff.clip(geom), ndvi_diff_vis, name + ' | NDVI Change 2021→2024', false);
+  Map.addLayer(L8_2025_diff.clip(geom), ndvi_diff_vis, name + ' | NDVI Change 2021→2025', false);
 
-  // --- NDBI snapshots ---
-  Map.addLayer(L89_2013.clip(geom), ndbi_vis, name + ' | NDBI 2013 — Pre-Donbas',   false);
-  Map.addLayer(L89_2014.clip(geom), ndbi_vis, name + ' | NDBI 2014 — Donbas Year 1',false);
-  Map.addLayer(L89_2015.clip(geom), ndbi_vis, name + ' | NDBI 2015 — Donbas Year 2',false);
-  Map.addLayer(L89_2021.clip(geom), ndbi_vis, name + ' | NDBI 2021 — Pre-Invasion', false);
-  Map.addLayer(L89_2022.clip(geom), ndbi_vis, name + ' | NDBI 2022 — Invasion Yr 1',false);
-  Map.addLayer(L89_2023.clip(geom), ndbi_vis, name + ' | NDBI 2023 — Invasion Yr 2',false);
-  Map.addLayer(L89_2024.clip(geom), ndbi_vis, name + ' | NDBI 2024 — Invasion Yr 3',false);
-  Map.addLayer(L89_2025.clip(geom), ndbi_vis, name + ' | NDBI 2025 — Invasion Yr 4',false);
+  Map.addLayer(L8_2021.clip(geom), ndbi_vis, name + ' | NDBI 2021 — Pre-Invasion Baseline', false);
+  Map.addLayer(L8_2022.clip(geom), ndbi_vis, name + ' | NDBI 2022 — Year 1 Invasion', false);
+  Map.addLayer(L8_2023.clip(geom), ndbi_vis, name + ' | NDBI 2023 — Year 2 Invasion', false);
+  Map.addLayer(L8_2024.clip(geom), ndbi_vis, name + ' | NDBI 2024 — Year 3 Invasion', false);
+  Map.addLayer(L8_2025.clip(geom), ndbi_vis, name + ' | NDBI 2025 — Year 4 Invasion', false);
 
-  // --- NDBI differences ---
-  // Wave 1
-  Map.addLayer(L89_diff_2013_2014.clip(geom), ndbi_diff_vis,
-    name + ' | [W1] NDBI Change 2013→2014', false);
-  Map.addLayer(L89_diff_2013_2015.clip(geom), ndbi_diff_vis,
-    name + ' | [W1] NDBI Change 2013→2015', false);
-  // Interim
-  Map.addLayer(L89_diff_2015_2021.clip(geom), ndbi_int_vis,
-    name + ' | [INT] NDBI Change 2015→2021 Recovery', false);
-  // Wave 2
-  Map.addLayer(L89_diff_2021_2022.clip(geom), ndbi_diff_vis,
-    name + ' | [W2] NDBI Change 2021→2022', false);
-  Map.addLayer(L89_diff_2021_2023.clip(geom), ndbi_diff_vis,
-    name + ' | [W2] NDBI Change 2021→2023', false);
-  Map.addLayer(L89_diff_2021_2024.clip(geom), ndbi_diff_vis,
-    name + ' | [W2] NDBI Change 2021→2024', false);
-  Map.addLayer(L89_diff_2021_2025.clip(geom), ndbi_diff_vis,
-    name + ' | [W2] NDBI Change 2021→2025', false);
-  // Cumulative
-  Map.addLayer(L89_diff_2013_2025.clip(geom), ndbi_diff_vis,
-    name + ' | [CUM] NDBI Change 2013→2025', false);
+  Map.addLayer(L8_2022_diff.clip(geom), ndbi_diff_vis, name + ' | NDBI Change 2021→2022', false);
+  Map.addLayer(L8_2023_diff.clip(geom), ndbi_diff_vis, name + ' | NDBI Change 2021→2023', false);
+  Map.addLayer(L8_2024_diff.clip(geom), ndbi_diff_vis, name + ' | NDBI Change 2021→2024', false);
+  Map.addLayer(L8_2025_diff.clip(geom), ndbi_diff_vis, name + ' | NDBI Change 2021→2025', false);
 });
 
 
-//// ----------------- DiD: All Periods ----------------- ////
+//// ----------------- Agricultural Landsat 8: NDVI 2021–2025 ----------------- ////
+//
+// Growing season: May–Sep (peak canopy, avoids snow/fallow)
+// Consistent with Ghorbanian et al. (2023) May–Aug analysis window
+// ndvi_agri_vis:      min:0.1 max:0.9 — healthy cropland sits 0.6–0.85 at peak season
+// ndvi_agri_diff_vis: ±0.25 — agricultural NDVI losses larger than urban; abandoned
+//                              fields can drop 0.15–0.25 in a single season
+//
+
+var L8_agri = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+  .filterBounds(agriUnion);
+
+print("Landsat 8 agri 2025 growing season count:",
+  L8_agri.filter(ee.Filter.calendarRange(5, 9, 'month'))
+         .filterDate('2025-01-01','2025-12-31').size());
+
+var L8_agri_2021 = L8_agri.filter(ee.Filter.calendarRange(5,9,'month')).filterDate('2021-01-01','2021-12-31').map(masksr).map(addIndicesL8).median();
+var L8_agri_2022 = L8_agri.filter(ee.Filter.calendarRange(5,9,'month')).filterDate('2022-01-01','2022-12-31').map(masksr).map(addIndicesL8).median();
+var L8_agri_2023 = L8_agri.filter(ee.Filter.calendarRange(5,9,'month')).filterDate('2023-01-01','2023-12-31').map(masksr).map(addIndicesL8).median();
+var L8_agri_2024 = L8_agri.filter(ee.Filter.calendarRange(5,9,'month')).filterDate('2024-01-01','2024-12-31').map(masksr).map(addIndicesL8).median();
+var L8_agri_2025 = L8_agri.filter(ee.Filter.calendarRange(5,9,'month')).filterDate('2025-01-01','2025-12-31').map(masksr).map(addIndicesL8).median();
+
+var L8_agri_2022_diff = L8_agri_2022.subtract(L8_agri_2021);
+var L8_agri_2023_diff = L8_agri_2023.subtract(L8_agri_2021);
+var L8_agri_2024_diff = L8_agri_2024.subtract(L8_agri_2021);
+var L8_agri_2025_diff = L8_agri_2025.subtract(L8_agri_2021);
+
+var ndvi_agri_vis      = {bands:'NDVI', min:0.1,   max:0.9,  palette:['white','lightgreen','darkgreen']};
+var ndvi_agri_diff_vis = {bands:'NDVI', min:-0.25, max:0.25, palette:['red','white','green']};
+
+agriRegionNames.forEach(function(name) {
+  var geom = agri_regions[name];
+
+  Map.addLayer(L8_agri_2021.clip(geom), ndvi_agri_vis, name + ' | [AGRI] NDVI 2021 — Baseline', false);
+  Map.addLayer(L8_agri_2022.clip(geom), ndvi_agri_vis, name + ' | [AGRI] NDVI 2022 — Year 1', false);
+  Map.addLayer(L8_agri_2023.clip(geom), ndvi_agri_vis, name + ' | [AGRI] NDVI 2023 — Year 2', false);
+  Map.addLayer(L8_agri_2024.clip(geom), ndvi_agri_vis, name + ' | [AGRI] NDVI 2024 — Year 3', false);
+  Map.addLayer(L8_agri_2025.clip(geom), ndvi_agri_vis, name + ' | [AGRI] NDVI 2025 — Year 4', false);
+
+  Map.addLayer(L8_agri_2022_diff.clip(geom), ndvi_agri_diff_vis, name + ' | [AGRI] NDVI Change 2021→2022 (red=loss)', false);
+  Map.addLayer(L8_agri_2023_diff.clip(geom), ndvi_agri_diff_vis, name + ' | [AGRI] NDVI Change 2021→2023 (red=loss)', false);
+  Map.addLayer(L8_agri_2024_diff.clip(geom), ndvi_agri_diff_vis, name + ' | [AGRI] NDVI Change 2021→2024 (red=loss)', false);
+  Map.addLayer(L8_agri_2025_diff.clip(geom), ndvi_agri_diff_vis, name + ' | [AGRI] NDVI Change 2021→2025 (red=loss)', false);
+});
+
+
+//// ----------------- Agricultural NDVI Time Series 2021–2025 ----------------- ////
+
+var agriRegionFC_all = ee.FeatureCollection(agriRegionNames.map(function(name) {
+  return ee.Feature(agri_regions[name], {label: name});
+}));
+
+var years = [2021, 2022, 2023, 2024, 2025];
+var agriNDVI_annual = ee.ImageCollection(years.map(function(yr) {
+  return L8_agri
+    .filter(ee.Filter.calendarRange(5, 9, 'month'))
+    .filterDate(ee.Date.fromYMD(yr,1,1), ee.Date.fromYMD(yr,12,31))
+    .map(masksr).map(addIndicesL8)
+    .median()
+    .select('NDVI')
+    .set('system:time_start', ee.Date.fromYMD(yr,7,1).millis())
+    .rename('NDVI');
+}));
+
+print(ui.Chart.image.seriesByRegion({
+  imageCollection: agriNDVI_annual,
+  regions:         agriRegionFC_all,
+  reducer:         ee.Reducer.mean(),
+  band:            'NDVI',
+  scale:           30,
+  xProperty:       'system:time_start',
+  seriesProperty:  'label'
+}).setOptions({
+  title:     'Agricultural Regions — Growing Season NDVI 2021–2025 (May–Sep)',
+  vAxis:     {title: 'Mean NDVI'},
+  hAxis:     {title: 'Year'},
+  lineWidth: 2,
+  pointSize: 5,
+  colors:    ['red','orange','gold','purple','brown','blue','cyan']
+}));
+
+
+//// ----------------- City DiD: NTL + NDVI + NDBI ----------------- ////
 
 function didPrint(label, image, band, scale) {
   var img = image.select(band);
@@ -379,69 +388,80 @@ function didPrint(label, image, band, scale) {
   var c   = img.reduceRegions({collection: controlRegions, reducer: ee.Reducer.mean(), scale: scale});
   var sm  = s.aggregate_mean('mean');
   var cm  = c.aggregate_mean('mean');
-  print("  Study:   ", sm);
-  print("  Control: ", cm);
-  print("  DiD:     ", ee.Number(sm).subtract(cm));
+  print("Study Regions "   + label + " (Mean):", sm);
+  print("Control Regions " + label + " (Mean):", cm);
+  print("DiD Estimator:", ee.Number(sm).subtract(cm));
 }
 
 print("=======================================================");
-print("WAVE 1: Donbas War");
+print("CITY DiD — Baseline: 2021 | All changes relative to 2021");
 print("=======================================================");
-print("--- 2013 → 2014 ---");
-print("NDVI:"); didPrint("NDVI", L89_diff_2013_2014, "NDVI", 30);
-print("NDBI:"); didPrint("NDBI", L89_diff_2013_2014, "NDBI", 30);
-print("NTL:");  didPrint("NTL",  NTL_diff_2013_2014, "ntl_diff", 500);
 
-print("--- 2013 → 2015 ---");
-print("NDVI:"); didPrint("NDVI", L89_diff_2013_2015, "NDVI", 30);
-print("NDBI:"); didPrint("NDBI", L89_diff_2013_2015, "NDBI", 30);
-print("NTL:");  didPrint("NTL",  NTL_diff_2013_2015, "ntl_diff", 500);
-
-print("=======================================================");
-print("INTERIM: Between Wars (recovery / stagnation)");
-print("=======================================================");
-print("--- 2015 → 2021 ---");
-print("NDVI:"); didPrint("NDVI", L89_diff_2015_2021, "NDVI", 30);
-print("NDBI:"); didPrint("NDBI", L89_diff_2015_2021, "NDBI", 30);
-print("NTL:");  didPrint("NTL",  NTL_diff_2015_2021, "ntl_diff", 500);
-
-print("=======================================================");
-print("WAVE 2: Full-Scale Invasion (2021 baseline)");
-print("=======================================================");
 print("--- 2021 → 2022 (Year 1) ---");
-print("NDVI:"); didPrint("NDVI", L89_diff_2021_2022, "NDVI", 30);
-print("NDBI:"); didPrint("NDBI", L89_diff_2021_2022, "NDBI", 30);
-print("NTL:");  didPrint("NTL",  NTL_diff_2021_2022, "ntl_diff", 500);
+print("NDVI:"); didPrint("NDVI [2021→2022]", L8_2022_diff, "NDVI", 30);
+print("NDBI:"); didPrint("NDBI [2021→2022]", L8_2022_diff, "NDBI", 30);
+print("NTL:");  didPrint("NTL  [2021→2022]", NTL_2022_diff, "ntl_diff", 500);
 
 print("--- 2021 → 2023 (Year 2) ---");
-print("NDVI:"); didPrint("NDVI", L89_diff_2021_2023, "NDVI", 30);
-print("NDBI:"); didPrint("NDBI", L89_diff_2021_2023, "NDBI", 30);
-print("NTL:");  didPrint("NTL",  NTL_diff_2021_2023, "ntl_diff", 500);
+print("NDVI:"); didPrint("NDVI [2021→2023]", L8_2023_diff, "NDVI", 30);
+print("NDBI:"); didPrint("NDBI [2021→2023]", L8_2023_diff, "NDBI", 30);
+print("NTL:");  didPrint("NTL  [2021→2023]", NTL_2023_diff, "ntl_diff", 500);
 
 print("--- 2021 → 2024 (Year 3) ---");
-print("NDVI:"); didPrint("NDVI", L89_diff_2021_2024, "NDVI", 30);
-print("NDBI:"); didPrint("NDBI", L89_diff_2021_2024, "NDBI", 30);
-print("NTL:");  didPrint("NTL",  NTL_diff_2021_2024, "ntl_diff", 500);
+print("NDVI:"); didPrint("NDVI [2021→2024]", L8_2024_diff, "NDVI", 30);
+print("NDBI:"); didPrint("NDBI [2021→2024]", L8_2024_diff, "NDBI", 30);
+print("NTL:");  didPrint("NTL  [2021→2024]", NTL_2024_diff, "ntl_diff", 500);
 
-print("--- 2021 → 2025 (Year 4 / Latest) ---");
-print("NDVI:"); didPrint("NDVI", L89_diff_2021_2025, "NDVI", 30);
-print("NDBI:"); didPrint("NDBI", L89_diff_2021_2025, "NDBI", 30);
-print("NTL:");  didPrint("NTL",  NTL_diff_2021_2025, "ntl_diff", 500);
+print("--- 2021 → 2025 (Year 4) ---");
+print("NDVI:"); didPrint("NDVI [2021→2025]", L8_2025_diff, "NDVI", 30);
+print("NDBI:"); didPrint("NDBI [2021→2025]", L8_2025_diff, "NDBI", 30);
+print("NTL:");  didPrint("NTL  [2021→2025]", NTL_2025_diff, "ntl_diff", 500);
+
+print("--- 2021 → Latest 2025/2026 (NTL only) ---");
+didPrint("NTL [2021→Latest]", NTL_latest_diff, "ntl_diff", 500);
+
+
+//// ----------------- Agricultural DiD: NDVI ----------------- ////
+
+function agriDidPrint(label, image, band, scale) {
+  var img = image.select(band);
+  var s   = img.reduceRegions({collection: agriStudyRegions,   reducer: ee.Reducer.mean(), scale: scale});
+  var c   = img.reduceRegions({collection: agriControlRegions, reducer: ee.Reducer.mean(), scale: scale});
+  var sm  = s.aggregate_mean('mean');
+  var cm  = c.aggregate_mean('mean');
+  print("Agri Study Regions "   + label + " (Mean):", sm);
+  print("Agri Control Regions " + label + " (Mean):", cm);
+  print("Agri DiD Estimator:", ee.Number(sm).subtract(cm));
+}
 
 print("=======================================================");
-print("CUMULATIVE: Full Conflict Period 2013 → 2025");
+print("AGRICULTURAL NDVI DiD — Growing Season (May–Sep)");
+print("Baseline: 2021 | Treatment: Donetsk/Luhansk/Zaporizhzhia/Kherson/Mykolaiv");
+print("Control: Vinnytsia & Khmelnytskyi | Source: Ghorbanian et al. 2023");
 print("=======================================================");
-print("NDVI:"); didPrint("NDVI", L89_diff_2013_2025, "NDVI", 30);
-print("NDBI:"); didPrint("NDBI", L89_diff_2013_2025, "NDBI", 30);
-print("NTL:");  didPrint("NTL",  NTL_diff_2013_2025, "ntl_diff", 500);
+
+print("--- 2021 → 2022 (Year 1 — spring planting disruption) ---");
+agriDidPrint("NDVI [2021→2022]", L8_agri_2022_diff, "NDVI", 30);
+
+print("--- 2021 → 2023 (Year 2 — persistent occupation) ---");
+agriDidPrint("NDVI [2021→2023]", L8_agri_2023_diff, "NDVI", 30);
+
+print("--- 2021 → 2024 (Year 3 — long-run productivity loss) ---");
+agriDidPrint("NDVI [2021→2024]", L8_agri_2024_diff, "NDVI", 30);
+
+print("--- 2021 → 2025 (Year 4 — latest growing season) ---");
+agriDidPrint("NDVI [2021→2025]", L8_agri_2025_diff, "NDVI", 30);
 
 print("=======================================================");
 print("DATASET NOTES");
 print("=======================================================");
-print("NTL 2013: VIIRS Annual V2.1 average_masked (monthly unavailable)");
-print("NTL 2014-2025: VIIRS Monthly V1 avg_rad annual means");
-print("NTL time series: 1 annual point (2013) + full monthly (2014-2025)");
-print("Landsat 2013-2020: L8 only | 2021-2025: L8+L9 merged");
-print("L8 latest: Feb 2026 | L9 latest: Mar 2026");
-print("2025 composite: all scenes Jan 2025 → Mar 2026");
-print("[W1]=Donbas 2013-2015 | [INT]=Interim 2015-2021 | [W2]=Invasion 2021-2025 | [CUM]=Full");
+print("NTL: VIIRS Monthly V1 avg_rad — consistent sensor throughout, no splice");
+print("NTL vis: max:60 uniform across all years for direct visual comparison");
+print("NTL diff: symmetric ±20 — black=no change, red=loss, yellow=gain");
+print("NTL latest: all available months Jan 2025 → Mar 2026");
+print("City Landsat 8: full annual median composites, 30m");
+print("City NDVI diff: ±0.20 | City NDBI diff: ±0.15");
+print("Agri Landsat 8: growing season May–Sep median composites, 30m");
+print("Agri NDVI diff: ±0.25 — wider range for cropland-scale losses");
+print("Agri regions: Ghorbanian et al. (2023) Fig.8 damaged-field oblasts");
+print("Check diagnostics above to confirm 2025 data availability");
