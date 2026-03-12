@@ -1,0 +1,163 @@
+//// ----------------- Agricultural Landsat 8: NDVI 2021–2025 ----------------- ////
+//
+// Growing season: May–Sep (peak canopy, avoids snow/fallow)
+// Consistent with Ghorbanian et al. (2023) May–Aug analysis window
+//
+
+var L8_agri = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+  .filterBounds(agriUnion);
+
+// Diagnostic
+print("Landsat 8 agri 2025 growing season count:",
+  L8_agri.filter(ee.Filter.calendarRange(5, 9, 'month'))
+         .filterDate('2025-01-01','2025-12-31').size());
+
+var L8_agri_2021 = L8_agri.filter(ee.Filter.calendarRange(5,9,'month')).filterDate('2021-01-01','2021-12-31').map(masksr).map(addIndicesL8).median();
+var L8_agri_2022 = L8_agri.filter(ee.Filter.calendarRange(5,9,'month')).filterDate('2022-01-01','2022-12-31').map(masksr).map(addIndicesL8).median();
+var L8_agri_2023 = L8_agri.filter(ee.Filter.calendarRange(5,9,'month')).filterDate('2023-01-01','2023-12-31').map(masksr).map(addIndicesL8).median();
+var L8_agri_2024 = L8_agri.filter(ee.Filter.calendarRange(5,9,'month')).filterDate('2024-01-01','2024-12-31').map(masksr).map(addIndicesL8).median();
+var L8_agri_2025 = L8_agri.filter(ee.Filter.calendarRange(5,9,'month')).filterDate('2025-01-01','2025-12-31').map(masksr).map(addIndicesL8).median();
+
+// Differences from 2021 baseline
+var L8_agri_2022_diff = L8_agri_2022.subtract(L8_agri_2021);
+var L8_agri_2023_diff = L8_agri_2023.subtract(L8_agri_2021);
+var L8_agri_2024_diff = L8_agri_2024.subtract(L8_agri_2021);
+var L8_agri_2025_diff = L8_agri_2025.subtract(L8_agri_2021);
+
+// Vis params
+var ndvi_agri_vis      = {bands:'NDVI', min:0.1,   max:0.9,  palette:['white','lightgreen','darkgreen']};
+var ndvi_agri_diff_vis = {bands:'NDVI', min:-0.25, max:0.25, palette:['red','white','green']};
+
+agriRegionNames.forEach(function(name) {
+  var geom = agri_regions[name];
+
+  Map.addLayer(L8_agri_2021.clip(geom), ndvi_agri_vis, name + ' | [AGRI] NDVI 2021 — Baseline', false);
+  Map.addLayer(L8_agri_2022.clip(geom), ndvi_agri_vis, name + ' | [AGRI] NDVI 2022 — Year 1', false);
+  Map.addLayer(L8_agri_2023.clip(geom), ndvi_agri_vis, name + ' | [AGRI] NDVI 2023 — Year 2', false);
+  Map.addLayer(L8_agri_2024.clip(geom), ndvi_agri_vis, name + ' | [AGRI] NDVI 2024 — Year 3', false);
+  Map.addLayer(L8_agri_2025.clip(geom), ndvi_agri_vis, name + ' | [AGRI] NDVI 2025 — Year 4', false);
+
+  Map.addLayer(L8_agri_2022_diff.clip(geom), ndvi_agri_diff_vis, name + ' | [AGRI] NDVI Change 2021→2022 (red=loss)', false);
+  Map.addLayer(L8_agri_2023_diff.clip(geom), ndvi_agri_diff_vis, name + ' | [AGRI] NDVI Change 2021→2023 (red=loss)', false);
+  Map.addLayer(L8_agri_2024_diff.clip(geom), ndvi_agri_diff_vis, name + ' | [AGRI] NDVI Change 2021→2024 (red=loss)', false);
+  Map.addLayer(L8_agri_2025_diff.clip(geom), ndvi_agri_diff_vis, name + ' | [AGRI] NDVI Change 2021→2025 (red=loss)', false);
+});
+
+
+//// ----------------- Agricultural NDVI Time Series 2021–2025 ----------------- ////
+
+var agriRegionFC_all = ee.FeatureCollection(agriRegionNames.map(function(name) {
+  return ee.Feature(agri_regions[name], {label: name});
+}));
+
+var years = [2021, 2022, 2023, 2024, 2025];
+var agriNDVI_annual = ee.ImageCollection(years.map(function(yr) {
+  return L8_agri
+    .filter(ee.Filter.calendarRange(5, 9, 'month'))
+    .filterDate(ee.Date.fromYMD(yr,1,1), ee.Date.fromYMD(yr,12,31))
+    .map(masksr).map(addIndicesL8)
+    .median()
+    .select('NDVI')
+    .set('system:time_start', ee.Date.fromYMD(yr,7,1).millis())
+    .rename('NDVI');
+}));
+
+print(ui.Chart.image.seriesByRegion({
+  imageCollection: agriNDVI_annual,
+  regions:         agriRegionFC_all,
+  reducer:         ee.Reducer.mean(),
+  band:            'NDVI',
+  scale:           30,
+  xProperty:       'system:time_start',
+  seriesProperty:  'label'
+}).setOptions({
+  title:     'Agricultural Regions — Growing Season NDVI 2021–2025 (May–Sep)',
+  vAxis:     {title: 'Mean NDVI'},
+  hAxis:     {title: 'Year'},
+  lineWidth: 2,
+  pointSize: 5,
+  colors:    ['red','orange','gold','purple','brown','blue','cyan']
+}));
+
+
+//// ----------------- City DiD: NTL + NDVI + NDBI ----------------- ////
+
+function didPrint(label, image, band, scale) {
+  var img = image.select(band);
+  var s   = img.reduceRegions({collection: studyRegions,   reducer: ee.Reducer.mean(), scale: scale});
+  var c   = img.reduceRegions({collection: controlRegions, reducer: ee.Reducer.mean(), scale: scale});
+  var sm  = s.aggregate_mean('mean');
+  var cm  = c.aggregate_mean('mean');
+  print("Study Regions "   + label + " (Mean):", sm);
+  print("Control Regions " + label + " (Mean):", cm);
+  print("DiD Estimator:", ee.Number(sm).subtract(cm));
+}
+
+print("=======================================================");
+print("CITY DiD — Baseline: 2021 | All changes relative to 2021");
+print("=======================================================");
+
+print("--- 2021 → 2022 (Year 1) ---");
+print("NDVI:"); didPrint("NDVI [2021→2022]", L8_2022_diff, "NDVI", 30);
+print("NDBI:"); didPrint("NDBI [2021→2022]", L8_2022_diff, "NDBI", 30);
+print("NTL:");  didPrint("NTL  [2021→2022]", NTL_2022_diff, "ntl_diff", 500);
+
+print("--- 2021 → 2023 (Year 2) ---");
+print("NDVI:"); didPrint("NDVI [2021→2023]", L8_2023_diff, "NDVI", 30);
+print("NDBI:"); didPrint("NDBI [2021→2023]", L8_2023_diff, "NDBI", 30);
+print("NTL:");  didPrint("NTL  [2021→2023]", NTL_2023_diff, "ntl_diff", 500);
+
+print("--- 2021 → 2024 (Year 3) ---");
+print("NDVI:"); didPrint("NDVI [2021→2024]", L8_2024_diff, "NDVI", 30);
+print("NDBI:"); didPrint("NDBI [2021→2024]", L8_2024_diff, "NDBI", 30);
+print("NTL:");  didPrint("NTL  [2021→2024]", NTL_2024_diff, "ntl_diff", 500);
+
+print("--- 2021 → 2025 (Year 4) ---");
+print("NDVI:"); didPrint("NDVI [2021→2025]", L8_2025_diff, "NDVI", 30);
+print("NDBI:"); didPrint("NDBI [2021→2025]", L8_2025_diff, "NDBI", 30);
+print("NTL:");  didPrint("NTL  [2021→2025]", NTL_2025_diff, "ntl_diff", 500);
+
+print("--- 2021 → Latest 2025/2026 (NTL only) ---");
+didPrint("NTL [2021→Latest]", NTL_latest_diff, "ntl_diff", 500);
+
+
+//// ----------------- Agricultural DiD: NDVI ----------------- ////
+
+function agriDidPrint(label, image, band, scale) {
+  var img = image.select(band);
+  var s   = img.reduceRegions({collection: agriStudyRegions,   reducer: ee.Reducer.mean(), scale: scale});
+  var c   = img.reduceRegions({collection: agriControlRegions, reducer: ee.Reducer.mean(), scale: scale});
+  var sm  = s.aggregate_mean('mean');
+  var cm  = c.aggregate_mean('mean');
+  print("Agri Study Regions "   + label + " (Mean):", sm);
+  print("Agri Control Regions " + label + " (Mean):", cm);
+  print("Agri DiD Estimator:", ee.Number(sm).subtract(cm));
+}
+
+print("=======================================================");
+print("AGRICULTURAL NDVI DiD — Growing Season (May–Sep)");
+print("Baseline: 2021 | Treatment: Donetsk/Luhansk/Zaporizhzhia/Kherson/Mykolaiv");
+print("Control: Vinnytsia & Khmelnytskyi | Source: Ghorbanian et al. 2023");
+print("=======================================================");
+
+print("--- 2021 → 2022 (Year 1 — spring planting disruption) ---");
+agriDidPrint("NDVI [2021→2022]", L8_agri_2022_diff, "NDVI", 30);
+
+print("--- 2021 → 2023 (Year 2 — persistent occupation) ---");
+agriDidPrint("NDVI [2021→2023]", L8_agri_2023_diff, "NDVI", 30);
+
+print("--- 2021 → 2024 (Year 3 — long-run productivity loss) ---");
+agriDidPrint("NDVI [2021→2024]", L8_agri_2024_diff, "NDVI", 30);
+
+print("--- 2021 → 2025 (Year 4 — latest growing season) ---");
+agriDidPrint("NDVI [2021→2025]", L8_agri_2025_diff, "NDVI", 30);
+
+print("=======================================================");
+print("DATASET NOTES");
+print("=======================================================");
+print("NTL: VIIRS Monthly V1 avg_rad — no sensor splice, entirely consistent");
+print("NTL latest: all available months Jan 2025 → Mar 2026");
+print("City Landsat 8: full annual median composites, 30m");
+print("Agri Landsat 8: growing season (May–Sep) median composites, 30m");
+print("Agri regions: Ghorbanian et al. (2023) Fig.8 damaged-field oblasts");
+print("Check diagnostics above to confirm 2025 data availability");
